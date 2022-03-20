@@ -13,14 +13,14 @@ device_user_id: ""
 #  from the ROS-CameraInfoManager:
 #  http://docs.ros.org/api/camera_info_manager/html/classcamera__info__manager_
 #  1_1CameraInfoManager.html#details
-camera_info_url: ""
+camera_info_url: package://arena_camera/config/camera.yaml
 
 #  The encoding of the pixels -- channel meaning, ordering, size
 #  taken from the list of strings in include/sensor_msgs/image_encodings.h
 #  The supported encodings are 'mono8', 'bgr8', 'rgb8', 'bayer_bggr8',
 #  'bayer_gbrg8' and 'bayer_rggb8'
 #  Default values are 'mono8' and 'rgb8'
-# image_encoding: "mono8"
+image_encoding: "bayer_rggb16"
 
 #  Binning factor to get downsampled images. It refers here to any camera
 #  setting which combines rectangular neighborhoods of pixels into larger
@@ -34,20 +34,7 @@ camera_info_url: ""
 #  The desired publisher frame rate if listening to the topics.
 #  This parameter can only be set once at startup
 #  Calling the GrabImages-Action can result in a higher framerate
-frame_rate: 5.0
-
-#  Mode of camera's shutter.
-#  The supported modes are "rolling", "global" and "global_reset"
-#  Default value is "" (empty) means default_shutter_mode
-#shutter_mode: ""
-
-##########################################################################
-######################## Image Intensity Settings ########################
-##########################################################################
-# The following settings do *NOT* have to be set. Each camera has default
-# values which provide an automatic image adjustment resulting in valid
-# images
-##########################################################################
+frame_rate: 24.0
 
 #  The exposure time in microseconds to be set after opening the camera.
 # exposure: 10000.0
@@ -57,12 +44,6 @@ frame_rate: 5.0
 #  called 'device specific units'.
 # gain: 0.5
 
-#  Gamma correction of pixel intensity.
-#  Adjusts the brightness of the pixel values output by the camera's sensor
-#  to account for a non-linearity in the human perception of brightness or
-#  of the display system (such as CRT).
-# gamma: 1.0
-
 #  The average intensity value of the images. It depends the exposure time
 #  as well as the gain setting. If 'exposure' is provided, the interface will
 #  try to reach the desired brightness by only varying the gain. (What may
@@ -71,17 +52,9 @@ frame_rate: 5.0
 #  try to reach the desired brightness by only varying the exposure time. If
 #  gain AND exposure are given, it is not possible to reach the brightness,
 #  because both are assumed to be fix.
-# brightness: 100
-
-#  Only relevant, if 'brightness' is set:
-#  The brightness_continuous flag controls the auto brightness function.
-#  If it is set to false, the brightness will only be reached once.
-#  Hence changing light conditions lead to changing brightness values.
-#  If it is set to true, the given brightness will be reached continuously,
-#  trying to adapt to changing light conditions. This is only possible for
-#  values in the possible auto range of the arena API which is e.g. [50 - 205]
-#  for acA2500-14um and acA1920-40gm
-# brightness_continuous: true
+#  This should be set lower, since the auto exposure/gain
+#  algorithm only looks at the highest 8 bits, which leads to an overestimation of gain
+brightness: 20
 
 #  Only relevant, if 'brightness' is set:
 #  If the camera should try to reach and / or keep the brightness, hence
@@ -95,27 +68,23 @@ frame_rate: 5.0
 #  reached by adapting the gain.
 exposure_auto: true
 gain_auto: true
-##########################################################################
+gain_auto_upper_limit: 20
 
-#  The timeout while searching the exposure which is connected to the
-#  desired brightness. For slow system this has to be increased.
-# exposure_search_timeout: 5.0
+ptp_enable: false  #true
 
-#  The exposure search can be limited with an upper bound. This is to prevent
-#  very high exposure times and resulting timeouts.
-#  A typical value for this upper bound is ~2000000us.
-# auto_exposure_upper_limit: 2000000.0
+# Communication options
+stream_packet_resend_enable: true  # retransmission in case of invalid packet
+stream_auto_negotiate_packet_size: true
+stream_max_num_resend_requests_per_image: 200
+packet_delay: 80 #5FPS:3000
 
-#  The MTU size. Only used for GigE cameras.
-#  To prevent lost frames configure the camera has to be configured
-#  with the MTU size the network card supports. A value greater 3000
-#  should be good (1500 for RaspberryPI)
-# gige:
-#  mtu_size: 3000
+# crop size param
+width: 1920 # 2880 # (min:4 max:2880)
+height: 1080 # 1860 # (min:2 max:1860)
+offsetX: 480
+offsetY: 390
 
-#  Only used for GigE cameras.
-#  The inter-package delay in ticks to prevent lost frames.
-#  For most of GigE-Cameras, a value of 1000 is reasonable.
-#  For cameras used on a RaspberryPI this value should be set to 11772.
-# gige:
-#  inter_pkg_delay: 1000
+# White Balance param
+# This functionality is buggy: when turned on, dimming the lens will lead to color artifacts. When turned off, 
+# the artifacts will appear the next time it's turned on. A Device power cycle is necessary to reset it
+balance_white_auto: true

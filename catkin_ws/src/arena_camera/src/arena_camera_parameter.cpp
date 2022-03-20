@@ -73,6 +73,20 @@ ArenaCameraParameter::ArenaCameraParameter()
   , inter_pkg_delay_(1000)
   , shutter_mode_(SM_DEFAULT)
   , auto_flash_(false)
+  ,
+  // #########################
+  ptp_enable_(false)
+  , width_(2880)
+  , height_(1860)
+  , offsetX_(0)
+  , offsetY_(0)
+  , balance_white_auto_(true)
+  , gain_auto_lower_limit_(0)
+  , gain_auto_upper_limit_(42)
+  , packet_delay_(80)
+  , stream_packet_resend_enable_(true)
+  , stream_auto_negotiate_packet_size_(true)
+  , stream_max_num_resend_requests_per_image_(200)
 {
 }
 
@@ -366,6 +380,23 @@ void ArenaCameraParameter::readFromRosParameterServer(const ros::NodeHandle& nh)
   {
     shutter_mode_ = SM_DEFAULT;
   }
+
+  nh.getParam("ptp_enable", ptp_enable_);
+
+  nh.getParam("width", width_);
+  nh.getParam("height", height_);
+  nh.getParam("offsetX", offsetX_);
+  nh.getParam("offsetY", offsetY_);
+
+  nh.getParam("balance_white_auto", balance_white_auto_);
+
+  nh.getParam("stream_auto_negotiate_packet_size", stream_auto_negotiate_packet_size_);
+  nh.getParam("stream_packet_resend_enable", stream_packet_resend_enable_);
+  nh.getParam("stream_max_num_resend_requests_per_image", stream_max_num_resend_requests_per_image_);
+  nh.getParam("packet_delay", packet_delay_);
+
+  nh.getParam("gain_auto_lower_limit", gain_auto_lower_limit_);
+  nh.getParam("gain_auto_upper_limit", gain_auto_upper_limit_);
 
   nh.param<bool>("auto_flash", auto_flash_, false);
   nh.param<bool>("auto_flash_line_2", auto_flash_line_2_, true);

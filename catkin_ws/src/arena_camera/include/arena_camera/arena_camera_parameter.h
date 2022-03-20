@@ -286,6 +286,28 @@ public:
    */
   bool auto_flash_line_3_;
 
+  // Auto Gain Limits
+  double gain_auto_lower_limit_;
+  double gain_auto_upper_limit_;
+
+  // Crop Params
+  int width_;
+  int height_;
+  int offsetX_;
+  int offsetY_;
+
+  // White Balance
+  bool balance_white_auto_;
+
+  // Packet Option
+  bool stream_auto_negotiate_packet_size_;
+  bool stream_packet_resend_enable_;
+  int stream_max_num_resend_requests_per_image_;
+  int packet_delay_;
+
+  // PTP
+  bool ptp_enable_;
+
 protected:
   /**
    * Validates the parameter set found on the ros parameter server.

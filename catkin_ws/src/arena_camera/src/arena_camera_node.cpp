@@ -401,6 +401,14 @@ bool ArenaCameraNode::startGrabbing()
     setImageEncoding(arena_camera_parameter_set_.imageEncoding());
 
     //
+    // STREAMING SETTINGS
+    //
+    Arena::SetNodeValue<bool>(pDevice_->GetTLStreamNodeMap(), "StreamAutoNegotiatePacketSize", arena_camera_parameter_set_.stream_auto_negotiate_packet_size_);
+    Arena::SetNodeValue<bool>(pDevice_->GetTLStreamNodeMap(),"StreamPacketResendEnable", arena_camera_parameter_set_.stream_packet_resend_enable_);
+    Arena::SetNodeValue<int64_t>(pDevice_->GetTLStreamNodeMap(), "StreamMaxNumResendRequestsPerImage", arena_camera_parameter_set_.stream_max_num_resend_requests_per_image_);
+    Arena::SetNodeValue<int64_t>(pNodeMap, "GevSCPD", arena_camera_parameter_set_.packet_delay_);
+
+    //
     // TRIGGER MODE
     //
     GenApi::CStringPtr pTriggerMode = pNodeMap->GetNode("TriggerMode");
@@ -409,6 +417,14 @@ bool ArenaCameraNode::startGrabbing()
       Arena::SetNodeValue<GenICam::gcstring>(pNodeMap, "TriggerMode", "On");
       Arena::SetNodeValue<GenICam::gcstring>(pNodeMap, "TriggerSource", "Software");
     }
+
+    //
+    // SENSOR CROP
+    //
+    Arena::SetNodeValue<int64_t>(pNodeMap, "Width", arena_camera_parameter_set_.width_);
+    Arena::SetNodeValue<int64_t>(pNodeMap, "Height", arena_camera_parameter_set_.height_);
+    Arena::SetNodeValue<int64_t>(pNodeMap, "OffsetX", arena_camera_parameter_set_.offsetX_);
+    Arena::SetNodeValue<int64_t>(pNodeMap, "OffsetY", arena_camera_parameter_set_.offsetY_);
 
     //
     // FRAMERATE
@@ -446,6 +462,23 @@ bool ArenaCameraNode::startGrabbing()
                                       cmdlnParamFrameRate);
       ROS_INFO("Framerate is set to: %.2f Hz", cmdlnParamFrameRate);
     }
+
+    //
+    // BALANCE WHITE AUTO
+    //
+    if(arena_camera_parameter_set_.balance_white_auto_)
+    {
+      Arena::SetNodeValue<GenICam::gcstring>(pNodeMap, "BalanceWhiteAuto", "Continuous");
+      ROS_INFO_STREAM("Settings BalanceWhiteAuto to auto/Continuous");
+    }
+    else
+    {
+      Arena::SetNodeValue<GenICam::gcstring>(pNodeMap, "BalanceWhiteAuto", "Off");
+      ROS_INFO_STREAM("Settings BalanceWhiteAuto to off/false");
+    }
+
+    // TARGET BRIGHTNESS
+    Arena::SetNodeValue<int64_t>(pNodeMap, "TargetBrightness", arena_camera_parameter_set_.brightness_);
 
     //
     // EXPOSURE AUTO & EXPOSURE
@@ -487,6 +520,9 @@ bool ArenaCameraNode::startGrabbing()
     if (arena_camera_parameter_set_.gain_auto_)
     {
       Arena::SetNodeValue<GenICam::gcstring>(pNodeMap, "GainAuto", "Continuous");
+      // set gain auto limits
+      Arena::SetNodeValue<double>(pNodeMap, "GainAutoLowerLimit", arena_camera_parameter_set_.gain_auto_lower_limit_);
+      Arena::SetNodeValue<double>(pNodeMap, "GainAutoUpperLimit", arena_camera_parameter_set_.gain_auto_upper_limit_);
       // todo update parameter on the server
       ROS_INFO_STREAM("Settings Gain to auto/Continuous");
     }
@@ -589,6 +625,54 @@ bool ArenaCameraNode::startGrabbing()
     // }
 
     Arena::SetNodeValue<GenICam::gcstring>(pDevice_->GetTLStreamNodeMap(), "StreamBufferHandlingMode", "NewestOnly");
+
+    // PTP
+    Arena::SetNodeValue<bool>(pNodeMap, "PtpEnable", arena_camera_parameter_set_.ptp_enable_);
+    if (arena_camera_parameter_set_.ptp_enable_)
+    {
+      ROS_INFO_STREAM("Enabling (slave-only) PTP");
+      Arena::SetNodeValue<bool>(pNodeMap, "PtpSlaveOnly", true);
+      ros::Rate r(0.5);
+      while(ros::ok())
+      {
+        if (Arena::GetNodeValue<GenICam::gcstring>(pNodeMap, "PtpStatus") == "Slave")
+	{
+	  break;
+	}
+        ROS_INFO_STREAM("Waiting to enter slave mode...");
+	r.sleep();
+	ros::spinOnce();
+      }
+
+      // wait until estimated master clock offset falls below threshold
+      int max_offset_ns = 1000;
+      int window_s = 5;
+      ROS_INFO("Camera waiting for clock offset < %d ns over %d s...", max_offset_ns, window_s);
+      bool currently_below = false;
+      ros::Time below_start;
+      while (ros::ok())
+      {
+        Arena::ExecuteNode(pNodeMap, "PtpDataSetLatch");
+	if (std::abs(Arena::GetNodeValue<int64_t>(pNodeMap, "PtpOffsetFromMaster")) < max_offset_ns)
+	{
+	  if (!currently_below)
+	  {
+            currently_below = true;
+	    below_start = ros::Time::now();
+	  }
+	  else if ((ros::Time::now() - below_start).toSec() >= window_s)
+	  {
+            break;
+          }
+	}
+	else
+	{
+	  currently_below = false;
+	}
+	ros::spinOnce();
+      }
+      ROS_INFO_STREAM("Camera (slave) PTP sync complete");
+    }
 
     //
     // Trigger Image
@@ -784,12 +868,28 @@ bool ArenaCameraNode::grabImage()
       Arena::ExecuteNode(pDevice_->GetNodeMap(), "TriggerSoftware");
     }
     pImage_ = pDevice_->GetImage(5000);
+
+    if(pImage_ ->IsIncomplete())
+    {
+        ROS_WARN("IsIncomplete %s", cameraFrame().c_str());
+        pDevice_->RequeueBuffer(pImage_);
+        return false;
+    }
     pData_ = pImage_->GetData();
 
     img_raw_msg_.data.resize(img_raw_msg_.height * img_raw_msg_.step);
     memcpy(&img_raw_msg_.data[0], pImage_->GetData(), img_raw_msg_.height * img_raw_msg_.step);
 
-    img_raw_msg_.header.stamp = ros::Time::now();
+    if (Arena::GetNodeValue<bool>(pDevice_->GetNodeMap(), "PtpEnable") == true)
+    {
+      // write device timestamp instead of ROS timestamp
+      img_raw_msg_.header.stamp.sec = pImage_->GetTimestampNs() / 1000000000;
+      img_raw_msg_.header.stamp.nsec = pImage_->GetTimestampNs() % 1000000000;
+    }
+    else
+    {
+      img_raw_msg_.header.stamp = ros::Time::now();
+    }
 
     pDevice_->RequeueBuffer(pImage_);
     return true;
@@ -1006,7 +1106,17 @@ ArenaCameraNode::grabImagesRaw(const camera_control_msgs::GrabImagesGoal::ConstP
     // imagePixelDepth already contains the number of channels
     img_raw_msg_.step = img_raw_msg_.width * (pImage_->GetBitsPerPixel() / 8);
 
-    img.header.stamp = ros::Time::now();
+    if (Arena::GetNodeValue<bool>(pDevice_->GetNodeMap(), "PtpEnable") == true)
+    {
+      // write device timestamp instead of ROS timestamp
+      img_raw_msg_.header.stamp.sec = pImage_->GetTimestampNs() / 1000000000;
+      img_raw_msg_.header.stamp.nsec = pImage_->GetTimestampNs() % 1000000000;
+    }
+    else
+    {
+      img_raw_msg_.header.stamp = ros::Time::now();
+    }
+
     img.header.frame_id = cameraFrame();
     feedback.curr_nr_images_taken = i + 1;
 
