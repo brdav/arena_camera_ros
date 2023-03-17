@@ -64,6 +64,7 @@
 #include <ArenaApi.h>
 #include <arena_camera/arena_camera.h>
 #include <arena_camera/arena_camera_parameter.h>
+#include <arena_camera/ImageTimeInfo.h>
 
 namespace arena_camera
 {
@@ -379,6 +380,9 @@ protected:
   sensor_msgs::Image img_raw_msg_;
   cv_bridge::CvImage* cv_bridge_img_rect_;
 
+  ros::Publisher time_pub_;
+  ImageTimeInfo time_msg_;
+
   camera_info_manager::CameraInfoManager* camera_info_manager_;
 
   std::vector<std::size_t> sampling_indices_;
@@ -386,6 +390,8 @@ protected:
 
   bool is_sleeping_;
   boost::recursive_mutex grab_mutex_;
+
+  bool capture_running_;
 
   /// diagnostics:
   diagnostic_updater::Updater diagnostics_updater_;

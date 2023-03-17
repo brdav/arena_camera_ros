@@ -95,7 +95,9 @@ catkin_python_setup()
 #
 # -----------------------------------------------------------------------------
 
-# N/A 
+add_message_files(FILES ImageTimeInfo.msg)
+generate_messages(DEPENDENCIES sensor_msgs)
+
 
 
 # -----------------------------------------------------------------------------

@@ -56,6 +56,7 @@ Arena::IDevice* pDevice_ = nullptr;
 Arena::IImage* pImage_ = nullptr;
 const uint8_t* pData_ = nullptr;
 GenApi::INodeMap* pNodeMap_ = nullptr;
+Arena::IChunkData* pChunkData_ = nullptr;
 
 using sensor_msgs::CameraInfo;
 using sensor_msgs::CameraInfoPtr;
@@ -78,6 +79,7 @@ ArenaCameraNode::ArenaCameraNode()
   , it_(new image_transport::ImageTransport(nh_))
   , img_raw_pub_(it_->advertiseCamera("image_raw", 1))
   , img_rect_pub_(nullptr)
+  , time_pub_(nh_.advertise<arena_camera::ImageTimeInfo>("timestamps", 1))
   , grab_imgs_raw_as_(nh_, "grab_images_raw", boost::bind(&ArenaCameraNode::grabImagesRawActionExecuteCB, this, _1),
                       false)
   , grab_imgs_rect_as_(nullptr)
@@ -87,6 +89,7 @@ ArenaCameraNode::ArenaCameraNode()
   , sampling_indices_()
   , brightness_exp_lut_()
   , is_sleeping_(false)
+  , capture_running_(false)
 {
   diagnostics_updater_.setHardwareID("none");
   diagnostics_updater_.add("camera_availability", this, &ArenaCameraNode::create_diagnostics);
@@ -401,6 +404,20 @@ bool ArenaCameraNode::startGrabbing()
     setImageEncoding(arena_camera_parameter_set_.imageEncoding());
 
     //
+    // CHUNK MODE
+    //
+    Arena::SetNodeValue<bool>(pDevice_->GetNodeMap(), "ChunkModeActive", true);
+    Arena::SetNodeValue<GenICam::gcstring>(pDevice_->GetNodeMap(), "ChunkSelector", "ExposureTime");
+    Arena::SetNodeValue<bool>(pDevice_->GetNodeMap(), "ChunkEnable", true);  // enable exposure time
+
+    //
+    // LINE IO CONFIGURATION
+    //
+    Arena::SetNodeValue<GenICam::gcstring>(pDevice_->GetNodeMap(), "LineSelector", arena_camera_parameter_set_.line_selector_.c_str());
+    Arena::SetNodeValue<GenICam::gcstring>(pDevice_->GetNodeMap(), "LineSource", arena_camera_parameter_set_.line_source_.c_str());
+    Arena::SetNodeValue<GenICam::gcstring>(pDevice_->GetNodeMap(), "LineMode", arena_camera_parameter_set_.line_mode_.c_str());
+
+    //
     // STREAMING SETTINGS
     //
     Arena::SetNodeValue<bool>(pDevice_->GetTLStreamNodeMap(), "StreamAutoNegotiatePacketSize", arena_camera_parameter_set_.stream_auto_negotiate_packet_size_);
@@ -626,7 +643,9 @@ bool ArenaCameraNode::startGrabbing()
 
     Arena::SetNodeValue<GenICam::gcstring>(pDevice_->GetTLStreamNodeMap(), "StreamBufferHandlingMode", "NewestOnly");
 
+    //
     // PTP
+    //
     Arena::SetNodeValue<bool>(pNodeMap, "PtpEnable", arena_camera_parameter_set_.ptp_enable_);
     if (arena_camera_parameter_set_.ptp_enable_)
     {
@@ -673,32 +692,11 @@ bool ArenaCameraNode::startGrabbing()
       }
       ROS_INFO_STREAM("Camera (slave) PTP sync complete");
     }
-
-    //
-    // Trigger Image
-    //
-
-    pDevice_->StartStream();
-    bool isTriggerArmed = false;
-
-    if (GenApi::IsWritable(pTriggerMode))
-    {
-      do
-      {
-        isTriggerArmed = Arena::GetNodeValue<bool>(pNodeMap, "TriggerArmed");
-      } while (isTriggerArmed == false);
-      Arena::ExecuteNode(pNodeMap, "TriggerSoftware");
-    }
-
-    pImage_ = pDevice_->GetImage(5000);
-    pData_ = pImage_->GetData();
-
-    img_raw_msg_.data.resize(img_raw_msg_.height * img_raw_msg_.step);
-    memcpy(&img_raw_msg_.data[0], pImage_->GetData(), img_raw_msg_.height * img_raw_msg_.step);
   }
   catch (GenICam::GenericException& e)
   {
-    ROS_ERROR_STREAM("Error while grabbing first image occurred: \r\n" << e.GetDescription());
+    // ROS_ERROR_STREAM("Error while grabbing first image occurred: \r\n" << e.GetDescription());
+    ROS_ERROR_STREAM("Error while preparing image grabbing occurred: \r\n" << e.GetDescription());
     return false;
   }
 
@@ -708,14 +706,9 @@ bool ArenaCameraNode::startGrabbing()
   // Encoding of pixels -- channel meaning, ordering, size
   // taken from the list of strings in include/sensor_msgs/image_encodings.h
   img_raw_msg_.encoding = currentROSEncoding();
-  img_raw_msg_.height = pImage_->GetHeight();
-  img_raw_msg_.width = pImage_->GetWidth();
-  // step = full row length in bytes, img_size = (step * rows), imagePixelDepth
-  // already contains the number of channels
-  img_raw_msg_.step = img_raw_msg_.width * (pImage_->GetBitsPerPixel() / 8);
 
   if (!camera_info_manager_->setCameraName(
-          std::string(Arena::GetNodeValue<GenICam::gcstring>(pNodeMap, "DeviceUserID").c_str())))
+         std::string(Arena::GetNodeValue<GenICam::gcstring>(pNodeMap, "DeviceUserID").c_str())))
   {
     // valid name contains only alphanumeric signs and '_'
     ROS_WARN_STREAM(
@@ -733,7 +726,6 @@ bool ArenaCameraNode::startGrabbing()
                   << "gamma = " << currentGamma() << ", "
                   << "shutter mode = " << arena_camera_parameter_set_.shutterModeString());
 
-  pDevice_->RequeueBuffer(pImage_);
   return true;
 }
 
@@ -817,6 +809,13 @@ void ArenaCameraNode::spin()
 
   if (!isSleeping() && (img_raw_pub_.getNumSubscribers() || getNumSubscribersRect()))
   {
+    if (!capture_running_)
+    {
+      pDevice_->StartStream();
+      capture_running_ = true;
+      ROS_INFO("Number subscribers received, starting capture...");
+    }
+
     if (getNumSubscribersRaw() || getNumSubscribersRect())
     {
       if (!grabImage())
@@ -835,7 +834,7 @@ void ArenaCameraNode::spin()
 
       // Publish via image_transport
       img_raw_pub_.publish(img_raw_msg_, *cam_info);
-      ROS_INFO_ONCE("Number subscribers received");
+      time_pub_.publish(time_msg_);
     }
 
     if (getNumSubscribersRect() > 0 && camera_info_manager_->isCalibrated())
@@ -846,7 +845,15 @@ void ArenaCameraNode::spin()
       pinhole_model_->fromCameraInfo(camera_info_manager_->getCameraInfo());
       pinhole_model_->rectifyImage(cv_img_raw->image, cv_bridge_img_rect_->image);
       img_rect_pub_->publish(*cv_bridge_img_rect_);
-      ROS_INFO_ONCE("Number subscribers rect received");
+    }
+  }
+  else
+  {
+    if (capture_running_)
+    {
+      pDevice_->StopStream();
+      capture_running_ = false;
+      ROS_INFO("No more subscribers, stopping capture...");
     }
   }
 }
@@ -869,13 +876,20 @@ bool ArenaCameraNode::grabImage()
     }
     pImage_ = pDevice_->GetImage(5000);
 
-    if(pImage_ ->IsIncomplete())
+    if(pImage_->IsIncomplete())
     {
         ROS_WARN("IsIncomplete %s", cameraFrame().c_str());
         pDevice_->RequeueBuffer(pImage_);
         return false;
     }
-    pData_ = pImage_->GetData();
+
+    pChunkData_ = pImage_->AsChunkData();
+
+    img_raw_msg_.height = pImage_->GetHeight();
+    img_raw_msg_.width = pImage_->GetWidth();
+    // step = full row length in bytes, img_size = (step * rows), imagePixelDepth
+    // already contains the number of channels
+    img_raw_msg_.step = img_raw_msg_.width * (pImage_->GetBitsPerPixel() / 8);
 
     img_raw_msg_.data.resize(img_raw_msg_.height * img_raw_msg_.step);
     memcpy(&img_raw_msg_.data[0], pImage_->GetData(), img_raw_msg_.height * img_raw_msg_.step);
@@ -883,13 +897,19 @@ bool ArenaCameraNode::grabImage()
     if (Arena::GetNodeValue<bool>(pDevice_->GetNodeMap(), "PtpEnable") == true)
     {
       // write device timestamp instead of ROS timestamp
-      img_raw_msg_.header.stamp.sec = pImage_->GetTimestampNs() / 1000000000;
-      img_raw_msg_.header.stamp.nsec = pImage_->GetTimestampNs() % 1000000000;
+      img_raw_msg_.header.stamp = ros::Time().fromNSec(pImage_->GetTimestampNs());
     }
     else
     {
       img_raw_msg_.header.stamp = ros::Time::now();
     }
+
+    // get exposure time
+    GenApi::CFloatPtr pChunkExposureTime_ = pChunkData_->GetChunk("ChunkExposureTime");
+    double chunkExposureTime = pChunkExposureTime_->GetValue();
+    time_msg_.header.stamp = img_raw_msg_.header.stamp;
+    time_msg_.time = time_msg_.header.stamp;
+    time_msg_.exposure_time = ros::Duration().fromNSec(chunkExposureTime * 1000);  // expos. time is in microseconds
 
     pDevice_->RequeueBuffer(pImage_);
     return true;
@@ -1109,8 +1129,7 @@ ArenaCameraNode::grabImagesRaw(const camera_control_msgs::GrabImagesGoal::ConstP
     if (Arena::GetNodeValue<bool>(pDevice_->GetNodeMap(), "PtpEnable") == true)
     {
       // write device timestamp instead of ROS timestamp
-      img_raw_msg_.header.stamp.sec = pImage_->GetTimestampNs() / 1000000000;
-      img_raw_msg_.header.stamp.nsec = pImage_->GetTimestampNs() % 1000000000;
+      img_raw_msg_.header.stamp = ros::Time().fromNSec(pImage_->GetTimestampNs());
     }
     else
     {

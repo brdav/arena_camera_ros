@@ -87,6 +87,9 @@ ArenaCameraParameter::ArenaCameraParameter()
   , stream_packet_resend_enable_(true)
   , stream_auto_negotiate_packet_size_(true)
   , stream_max_num_resend_requests_per_image_(200)
+  , line_selector_("Line1")
+  , line_source_("Off")
+  , line_mode_("Input")
 {
 }
 
@@ -394,6 +397,10 @@ void ArenaCameraParameter::readFromRosParameterServer(const ros::NodeHandle& nh)
   nh.getParam("stream_packet_resend_enable", stream_packet_resend_enable_);
   nh.getParam("stream_max_num_resend_requests_per_image", stream_max_num_resend_requests_per_image_);
   nh.getParam("packet_delay", packet_delay_);
+
+  nh.getParam("line_selector", line_selector_);
+  nh.getParam("line_source", line_source_);
+  nh.getParam("line_mode", line_mode_);
 
   nh.getParam("gain_auto_lower_limit", gain_auto_lower_limit_);
   nh.getParam("gain_auto_upper_limit", gain_auto_upper_limit_);

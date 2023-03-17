@@ -305,6 +305,11 @@ public:
   int stream_max_num_resend_requests_per_image_;
   int packet_delay_;
 
+  // IO Line Config
+  std::string line_selector_;
+  std::string line_source_;
+  std::string line_mode_;
+
   // PTP
   bool ptp_enable_;
 
